@@ -4,6 +4,8 @@
 # + fastfetch-style system info banner at startup
 # ===============================================
 # WARNING: Security tools are dual-use. Only use them legally and with permission.
+# BlackArch strap.sh is downloaded over HTTPS and its SHA256 is printed for manual
+# verification. Set BLACKARCH_STRAP_SHA256 to a known-good hash to enforce it.
 # ===============================================
 
 set -euo pipefail
@@ -67,12 +69,39 @@ add_blackarch_repo() {
   echo -e "${YELLOW}This will add the BlackArch repository to /etc/pacman.conf and import keys.${RESET}"
   echo -e "${RED}BlackArch contains thousands of security tools and may cause package conflicts.${RESET}"
   if confirm "Proceed to add BlackArch repo? (only do this if you know the risks)"; then
-    curl -O https://blackarch.org/strap.sh
-    chmod +x strap.sh
-    sudo ./strap.sh
-    rm -f strap.sh
-    echo -e "${GREEN}BlackArch repo added. Updating databases...${RESET}"
-    sudo pacman -Syyu
+    local strap
+    strap="$(mktemp)"
+    if ! curl -fL --proto '=https' --tlsv1.2 -o "$strap" https://blackarch.org/strap.sh; then
+      echo -e "${RED}Failed to download strap.sh over HTTPS.${RESET}"
+      rm -f "$strap"
+      return 1
+    fi
+
+    local expected="${BLACKARCH_STRAP_SHA256:-}"
+    local actual
+    actual="$(sha256sum "$strap" | awk '{print $1}')"
+    echo -e "${CYAN}strap.sh SHA256:${RESET} $actual"
+
+    if [[ -n "$expected" ]]; then
+      if [[ "$actual" != "$expected" ]]; then
+        echo -e "${RED}Checksum mismatch. Expected: $expected${RESET}"
+        rm -f "$strap"
+        return 1
+      fi
+      echo -e "${GREEN}Checksum verified.${RESET}"
+    elif ! confirm "Verify this hash against the official BlackArch site before running. Continue?"; then
+      echo -e "${MAGENTA}Skipped running strap.sh.${RESET}"
+      rm -f "$strap"
+      return 0
+    fi
+
+    if sudo bash "$strap"; then
+      echo -e "${GREEN}BlackArch repo added. Updating databases...${RESET}"
+      sudo pacman -Syyu
+    else
+      echo -e "${RED}strap.sh failed; BlackArch repo was not configured.${RESET}"
+    fi
+    rm -f "$strap"
   else
     echo -e "${MAGENTA}Skipped adding BlackArch repository.${RESET}"
   fi
